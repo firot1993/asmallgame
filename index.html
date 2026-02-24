@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>回家过年模拟器</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+    <aside id="model-status" class="model-status neutral">
+      <strong id="model-status-title">模型状态</strong>
+      <small id="model-status-text">本地模式</small>
+    </aside>
+
+    <main class="app">
+      <header class="hero">
+        <h1>回家过年模拟器</h1>
+        <p>在金钱和快乐里硬撑到初七。</p>
+      </header>
+
+      <section id="start-panel" class="panel">
+        <h2>选择职业</h2>
+        <div class="jobs">
+          <button data-job="程序员">程序员<br /><small>¥20000 / 快乐60</small></button>
+          <button data-job="销售">销售<br /><small>¥50000 / 快乐50</small></button>
+          <button data-job="自由职业">自由职业<br /><small>¥8000 / 快乐70</small></button>
+        </div>
+
+        <div class="provider-box">
+          <h3>AI 事件来源</h3>
+          <label>
+            提供商
+            <select id="provider-select"></select>
+          </label>
+          <label>
+            Endpoint
+            <input id="provider-endpoint" type="text" placeholder="可选，留空使用默认" />
+          </label>
+          <label>
+            Model
+            <input id="provider-model" type="text" placeholder="例如 gpt-4o-mini" />
+          </label>
+          <label>
+            API Key
+            <input id="provider-api-key" type="password" placeholder="仅保存在本地浏览器" />
+          </label>
+          <p id="provider-note" class="provider-note"></p>
+          <button id="save-provider-btn" type="button">保存 AI 设置</button>
+        </div>
+
+        <div class="actions">
+          <button id="continue-btn" hidden>继续上次存档</button>
+        </div>
+      </section>
+
+      <section id="game-panel" class="panel" hidden>
+        <div class="status-grid">
+          <div><span>职业</span><strong id="status-job"></strong></div>
+          <div><span>金钱</span><strong id="status-money"></strong></div>
+          <div><span>快乐</span><strong id="status-happy"></strong></div>
+          <div><span>日期</span><strong id="status-day"></strong></div>
+        </div>
+
+        <section class="scene-card">
+          <div id="scene" class="scene"></div>
+          <div class="scene-caption">
+            <strong>春节现场</strong>
+            <small id="scene-caption">你在亲戚局里来回走位。</small>
+          </div>
+        </section>
+
+        <article class="event-card">
+          <div class="event-head">
+            <span id="event-type"></span>
+            <small id="hint"></small>
+          </div>
+          <p id="event-setup"></p>
+          <div id="choices" class="choices"></div>
+        </article>
+
+        <section class="monitor-grid">
+          <article class="monitor-card">
+            <div><span>资金监控</span><strong id="monitor-money"></strong></div>
+            <div class="bar"><i id="monitor-money-fill"></i></div>
+          </article>
+          <article class="monitor-card">
+            <div><span>情绪监控</span><strong id="monitor-happy"></strong></div>
+            <div class="bar"><i id="monitor-happy-fill"></i></div>
+          </article>
+          <article class="monitor-card">
+            <div><span>压力指数</span><strong id="monitor-pressure"></strong></div>
+            <div class="bar"><i id="monitor-pressure-fill"></i></div>
+          </article>
+        </section>
+
+        <p id="last-delta" class="delta"></p>
+
+        <div class="actions">
+          <button id="restart-btn">重新开局</button>
+        </div>
+      </section>
+
+      <section id="end-panel" class="panel" hidden>
+        <h2 id="end-title"></h2>
+        <p id="end-body"></p>
+        <div class="actions">
+          <button id="restart-btn-2">再来一局</button>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./game.js"></script>
+  </body>
+</html>
