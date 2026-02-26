@@ -15,6 +15,13 @@ import {
   saveAiConfig,
   loadAiConfig,
 } from "./state.js";
+import {
+  getAiSelectionLogs,
+  getAiHttpErrorLogs,
+  getLlmTokenAveragesByProviderModel,
+  clearAiDebugStorage,
+  clearAllLocalStorage,
+} from "./ai/log-store.js";
 import * as render from "./render.js";
 
 let dayEventCache = new Map();
@@ -22,6 +29,7 @@ let queuedDays = new Set();
 let queuedDayPromises = new Map();
 let generationQueue = Promise.resolve();
 let generationEpoch = 0;
+let generationAbort = new AbortController();
 
 function debugData() {
   return {
@@ -55,6 +63,8 @@ function showRoundLoadingState(message) {
 
 function clearQueuedGeneration() {
   generationEpoch += 1;
+  generationAbort.abort();
+  generationAbort = new AbortController();
   dayEventCache = new Map();
   queuedDays = new Set();
   queuedDayPromises = new Map();
@@ -80,6 +90,7 @@ function enqueueDayGeneration(targetDay, sourceState, sourceHistory) {
   };
   const basedOnDay = sourceState.day;
   const requestHistory = Array.isArray(sourceHistory) ? sourceHistory.slice(-20) : [];
+  const abortSignal = generationAbort.signal;
 
   queuedDays.add(targetDay);
   updateDebug(`enqueue day ${targetDay}`);
@@ -89,7 +100,7 @@ function enqueueDayGeneration(targetDay, sourceState, sourceHistory) {
         return;
       }
 
-      const payload = await getDailyEvents(requestState, aiConfig, { history: requestHistory });
+      const payload = await getDailyEvents(requestState, aiConfig, { history: requestHistory }, { signal: abortSignal });
       if (epoch !== generationEpoch) {
         return;
       }
@@ -158,7 +169,7 @@ async function resolveDayPayloadFromQueue(targetDay) {
   }
 
   updateDebug(`fallback fetch day ${targetDay}`);
-  return getDailyEvents(gameState.state, aiConfig, { history: gameState.recentHistory });
+  return getDailyEvents(gameState.state, aiConfig, { history: gameState.recentHistory }, { signal: generationAbort.signal });
 }
 
 function handleDayPayload(payload) {
@@ -181,6 +192,39 @@ function handleDayPayload(payload) {
 
 function providerLabelById(id) {
   return AI_PROVIDER_PRESETS.find((item) => item.id === id)?.label || id || "本地随机";
+}
+
+function ensureProviderProfiles() {
+  if (!aiConfig.profiles || typeof aiConfig.profiles !== "object") {
+    aiConfig.profiles = {};
+  }
+}
+
+function providerDefaultsById(id) {
+  const preset = AI_PROVIDER_PRESETS.find((item) => item.id === id);
+  return {
+    endpoint: preset?.defaultEndpoint || "",
+    model: preset?.defaultModel || "",
+    apiKey: "",
+  };
+}
+
+function upsertProviderProfile(id, values) {
+  if (!id) {
+    return;
+  }
+
+  ensureProviderProfiles();
+  aiConfig.profiles[id] = {
+    endpoint: values.endpoint || "",
+    model: values.model || "",
+    apiKey: values.apiKey || "",
+  };
+}
+
+function loadProviderProfile(id) {
+  ensureProviderProfiles();
+  return aiConfig.profiles[id] || providerDefaultsById(id);
 }
 
 async function startDay() {
@@ -312,11 +356,71 @@ render.onRestartClick2(() => {
   initStartPanel();
 });
 
+render.onExportAiSelectionLogsClick(() => {
+  const logs = getAiSelectionLogs();
+  if (logs.length === 0) {
+    render.showProviderNote("暂无 AI 生成日志可导出。");
+    return;
+  }
+
+  render.exportAiSelectionLogs(logs);
+  render.showProviderNote(`已导出 ${logs.length} 条生成日志。`);
+});
+
+render.onExportAiHttpErrorLogsClick(() => {
+  const logs = getAiHttpErrorLogs();
+  if (logs.length === 0) {
+    render.showProviderNote("暂无 AI 请求错误日志可导出。");
+    return;
+  }
+
+  render.exportAiHttpErrorLogs(logs);
+  render.showProviderNote(`已导出 ${logs.length} 条请求错误日志。`);
+});
+
+render.onClearDebugInfoClick(() => {
+  const confirmed = window.confirm("确定清空调试信息吗？这会删除 AI 生成日志、请求错误日志和 LLM token 统计。");
+  if (!confirmed) {
+    return;
+  }
+
+  clearAiDebugStorage();
+  render.updateLlmMonitor(null, getLlmTokenAveragesByProviderModel(aiConfig.id, aiConfig.model));
+  render.showProviderNote("调试信息已清空。");
+});
+
+render.onClearLocalStorageClick(() => {
+  const confirmed = window.confirm("确定清空全部本地存储吗？这会删除存档、AI配置、缓存和日志。");
+  if (!confirmed) {
+    return;
+  }
+
+  clearAllLocalStorage();
+  window.location.reload();
+});
+
 function handleProviderChange(newConfig) {
-  Object.assign(aiConfig, newConfig);
+  const prevId = aiConfig.id;
+  if (newConfig.id !== prevId) {
+    // The onChange payload still contains the old provider fields. Keep them in-memory.
+    upsertProviderProfile(prevId, {
+      endpoint: newConfig.endpoint,
+      model: newConfig.model,
+      apiKey: newConfig.apiKey,
+    });
+    const next = loadProviderProfile(newConfig.id);
+    aiConfig.id = newConfig.id;
+    aiConfig.endpoint = next.endpoint;
+    aiConfig.model = next.model;
+    aiConfig.apiKey = next.apiKey;
+  } else {
+    Object.assign(aiConfig, newConfig);
+    upsertProviderProfile(aiConfig.id, aiConfig);
+  }
   render.updateProviderInputs(aiConfig);
   clearQueuedGeneration();
   render.refreshIdleModelStatus(aiConfig);
+  render.updateLlmMonitor(null, getLlmTokenAveragesByProviderModel(aiConfig.id, aiConfig.model));
 }
 
 loadAiConfig();
@@ -324,29 +428,47 @@ render.initProviderSelect(AI_PROVIDER_PRESETS, aiConfig, {
   onChange: handleProviderChange,
   onSave: (newConfig) => {
     Object.assign(aiConfig, newConfig);
+    upsertProviderProfile(aiConfig.id, aiConfig);
     saveAiConfig();
     render.updateProviderInputs(aiConfig);
     render.showProviderSavedNote(aiConfig);
     clearQueuedGeneration();
     render.refreshIdleModelStatus(aiConfig);
+    render.updateLlmMonitor(null, getLlmTokenAveragesByProviderModel(aiConfig.id, aiConfig.model));
   },
 });
 render.refreshIdleModelStatus(aiConfig);
+render.updateLlmMonitor(null, getLlmTokenAveragesByProviderModel(aiConfig.id, aiConfig.model));
 
-if (render.DEBUG_MODE) {
-  window.addEventListener("lifemaker-ai-debug", (evt) => {
-    const detail = evt?.detail ?? {};
-    const provider = detail.provider ? `[${detail.provider}]` : "[ai]";
-    const phase = detail.phase ? ` ${detail.phase}` : "";
+window.addEventListener("lifemaker-ai-debug", (evt) => {
+  const detail = evt?.detail ?? {};
+
+  if (detail.phase === "metrics") {
+    // Metrics are emitted before logs are persisted; defer average refresh one tick.
+    render.updateLlmMonitor(
+      detail.content,
+      getLlmTokenAveragesByProviderModel(detail.content?.provider, detail.content?.model)
+    );
+    setTimeout(() => {
+      render.updateLlmMonitor(
+        detail.content,
+        getLlmTokenAveragesByProviderModel(detail.content?.provider, detail.content?.model)
+      );
+    }, 0);
+  }
+
+  if (render.DEBUG_MODE) {
+    const providerText = detail.provider ? `[${detail.provider}]` : "[ai]";
+    const phaseText = detail.phase ? ` ${detail.phase}` : "";
     const target = detail.phase === "input" ? "request" : "response";
-    const line = `${provider}${phase} ${render.summarizeDebugContent(detail.content)}`;
+    const line = `${providerText}${phaseText} ${render.summarizeDebugContent(detail.content)}`;
     if (target === "request") {
       render.setDebugModelRequest(line);
     } else {
       render.setDebugModelResponse(line);
     }
     updateDebug("ai-debug");
-  });
-}
+  }
+});
 updateDebug("init");
 initStartPanel();

@@ -13,6 +13,11 @@
       <strong id="model-status-title">模型状态</strong>
       <small id="model-status-text">本地模式</small>
     </aside>
+    <aside id="llm-monitor" class="llm-monitor">
+      <strong>LLM 监控</strong>
+      <small id="llm-monitor-live">等待请求…</small>
+      <small id="llm-monitor-avg">平均 tokens: -</small>
+    </aside>
 
     <main class="app">
       <header class="hero">
@@ -39,15 +44,21 @@
             <input id="provider-endpoint" type="text" placeholder="可选，留空使用默认" />
           </label>
           <label>
-            Model
-            <input id="provider-model" type="text" placeholder="例如 gpt-4o-mini" />
+            模型名
+            <input id="provider-model" type="text" placeholder="例如 x-ai/grok-4.1-fast" />
           </label>
           <label>
             API Key
             <input id="provider-api-key" type="password" placeholder="仅保存在本地浏览器" />
           </label>
           <p id="provider-note" class="provider-note"></p>
-          <button id="save-provider-btn" type="button">保存 AI 设置</button>
+          <div class="provider-actions">
+            <button id="save-provider-btn" type="button">保存 AI 设置</button>
+            <button id="export-ai-selection-log-btn" type="button">导出生成日志 JSON</button>
+            <button id="export-ai-http-error-log-btn" type="button">导出请求错误 JSON</button>
+            <button id="clear-debug-info-btn" type="button">清空调试信息</button>
+            <button id="clear-local-storage-btn" type="button">清空本地存储</button>
+          </div>
         </div>
 
         <div class="actions">

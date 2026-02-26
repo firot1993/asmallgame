@@ -12,6 +12,8 @@ const SCENE_POINTS = [
 ];
 
 const DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "1";
+const CHOICE_PICK_DELAY_MS = 170;
+const DELTA_VISUAL_MS = 820;
 
 const el = {
   startPanel: document.getElementById("start-panel"),
@@ -37,10 +39,17 @@ const el = {
   providerModel: document.getElementById("provider-model"),
   providerApiKey: document.getElementById("provider-api-key"),
   saveProviderBtn: document.getElementById("save-provider-btn"),
+  exportAiSelectionLogBtn: document.getElementById("export-ai-selection-log-btn"),
+  exportAiHttpErrorLogBtn: document.getElementById("export-ai-http-error-log-btn"),
+  clearDebugInfoBtn: document.getElementById("clear-debug-info-btn"),
+  clearLocalStorageBtn: document.getElementById("clear-local-storage-btn"),
   providerNote: document.getElementById("provider-note"),
   modelStatus: document.getElementById("model-status"),
   modelStatusTitle: document.getElementById("model-status-title"),
   modelStatusText: document.getElementById("model-status-text"),
+  llmMonitor: document.getElementById("llm-monitor"),
+  llmMonitorLive: document.getElementById("llm-monitor-live"),
+  llmMonitorAvg: document.getElementById("llm-monitor-avg"),
   scene: document.getElementById("scene"),
   sceneCaption: document.getElementById("scene-caption"),
   monitorMoney: document.getElementById("monitor-money"),
@@ -49,6 +58,9 @@ const el = {
   monitorMoneyFill: document.getElementById("monitor-money-fill"),
   monitorHappyFill: document.getElementById("monitor-happy-fill"),
   monitorPressureFill: document.getElementById("monitor-pressure-fill"),
+  monitorMoneyCard: document.getElementById("monitor-money-fill")?.closest(".monitor-card"),
+  monitorHappyCard: document.getElementById("monitor-happy-fill")?.closest(".monitor-card"),
+  monitorPressureCard: document.getElementById("monitor-pressure-fill")?.closest(".monitor-card"),
 };
 
 let actor = null;
@@ -57,6 +69,10 @@ let debugPanelEl = null;
 let debugNote = "";
 let lastModelRequestDebug = "-";
 let lastModelResponseDebug = "-";
+let previousStatusSnapshot = null;
+let previousMonitorSnapshot = null;
+const deltaClassTimers = new WeakMap();
+const deltaBadgeTimers = new WeakMap();
 
 export function dayLabel(day) {
   return DAY_LABELS[day] ?? `第${day + 1}天`;
@@ -74,6 +90,42 @@ export function setModelStatus(kind, text) {
   el.modelStatus.className = `model-status ${kind}`;
   el.modelStatusTitle.textContent = "模型状态";
   el.modelStatusText.textContent = text;
+}
+
+function fmtMetric(value, suffix = "") {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  return `${Math.round(value * 10) / 10}${suffix}`;
+}
+
+export function updateLlmMonitor(monitor, avg) {
+  if (!el.llmMonitor || !el.llmMonitorLive || !el.llmMonitorAvg) {
+    return;
+  }
+
+  if (monitor && typeof monitor === "object") {
+    const provider = monitor.provider || "-";
+    const model = monitor.model || "-";
+    const ttft = fmtMetric(monitor.ttftMs, "ms");
+    const tpot = fmtMetric(monitor.tpotMs, "ms");
+    const total = fmtMetric(monitor.totalTokens);
+    const latency = fmtMetric(monitor.latencyMs, "ms");
+    el.llmMonitorLive.textContent = `[${provider} / ${model}] TTFT ${ttft} / TPOT ${tpot} / 延迟 ${latency} / tokens ${total}`;
+  } else {
+    el.llmMonitorLive.textContent = "等待请求…";
+  }
+
+  if (avg && avg.sampleCount > 0) {
+    const avgTotal = fmtMetric(avg.avgTotalTokens);
+    const avgPrompt = fmtMetric(avg.avgPromptTokens);
+    const avgCompletion = fmtMetric(avg.avgCompletionTokens);
+    const avgLabel = avg.label ? ` [${avg.label}]` : "";
+    el.llmMonitorAvg.textContent = `平均 tokens${avgLabel}: ${avgTotal} (prompt ${avgPrompt} / completion ${avgCompletion})，样本 ${avg.sampleCount}`;
+  } else {
+    const avgLabel = avg?.label ? ` [${avg.label}]` : "";
+    el.llmMonitorAvg.textContent = `平均 tokens${avgLabel}: -`;
+  }
 }
 
 export function refreshIdleModelStatus(aiConfig) {
@@ -211,6 +263,60 @@ function renderMonitor(fillEl, ratio) {
   fillEl.style.width = `${Math.round(clamp01(ratio) * 100)}%`;
 }
 
+function replayDirectionalClass(node, diff) {
+  if (!node || !diff) {
+    return;
+  }
+
+  const cls = diff > 0 ? "delta-up" : "delta-down";
+  const prevTimer = deltaClassTimers.get(node);
+  if (prevTimer) {
+    clearTimeout(prevTimer);
+  }
+  node.classList.remove("delta-up", "delta-down");
+  void node.offsetWidth;
+  node.classList.add(cls);
+  const timer = window.setTimeout(() => {
+    node.classList.remove("delta-up", "delta-down");
+    deltaClassTimers.delete(node);
+  }, DELTA_VISUAL_MS);
+  deltaClassTimers.set(node, timer);
+}
+
+function animateMetricChange(valueEl, fillEl, cardEl, displayDiff, sentimentDiff = displayDiff) {
+  if (!displayDiff) {
+    return;
+  }
+
+  replayDirectionalClass(valueEl, sentimentDiff);
+  replayDirectionalClass(fillEl, sentimentDiff);
+  replayDirectionalClass(cardEl, sentimentDiff);
+  replayDeltaBadge(valueEl, displayDiff, sentimentDiff);
+}
+
+function replayDeltaBadge(node, displayDiff, sentimentDiff = displayDiff) {
+  if (!node || !displayDiff) {
+    return;
+  }
+
+  const prevTimer = deltaBadgeTimers.get(node);
+  if (prevTimer) {
+    clearTimeout(prevTimer);
+  }
+
+  node.dataset.deltaText = `${displayDiff > 0 ? "+" : ""}${displayDiff}`;
+  node.classList.remove("delta-badge-up", "delta-badge-down");
+  void node.offsetWidth;
+  node.classList.add(sentimentDiff > 0 ? "delta-badge-up" : "delta-badge-down");
+
+  const timer = window.setTimeout(() => {
+    node.classList.remove("delta-badge-up", "delta-badge-down");
+    node.removeAttribute("data-delta-text");
+    deltaBadgeTimers.delete(node);
+  }, DELTA_VISUAL_MS + 120);
+  deltaBadgeTimers.set(node, timer);
+}
+
 export function updateMonitoring(gs) {
   const state = gs.state;
   if (!state) {
@@ -219,23 +325,63 @@ export function updateMonitoring(gs) {
 
   const moneyRatio = clamp01((state.money + 5000) / 65000);
   const happyRatio = clamp01(state.happy / 100);
-  const pressureScore = clamp01((1 - happyRatio) * 0.6 + (1 - moneyRatio) * 0.25 + (state.day / 6) * 0.15);
+  const pressureValue = Math.round(
+    clamp01((1 - happyRatio) * 0.6 + (1 - moneyRatio) * 0.25 + (state.day / 6) * 0.15) * 100
+  );
+  const previous = previousMonitorSnapshot;
 
   el.monitorMoney.textContent = `¥${state.money}`;
   el.monitorHappy.textContent = `${state.happy}`;
-  el.monitorPressure.textContent = `${Math.round(pressureScore * 100)}`;
+  el.monitorPressure.textContent = `${pressureValue}`;
 
   renderMonitor(el.monitorMoneyFill, moneyRatio);
   renderMonitor(el.monitorHappyFill, happyRatio);
-  renderMonitor(el.monitorPressureFill, pressureScore);
+  renderMonitor(el.monitorPressureFill, pressureValue / 100);
+
+  if (previous) {
+    animateMetricChange(
+      el.monitorMoney,
+      el.monitorMoneyFill,
+      el.monitorMoneyCard,
+      state.money - previous.money
+    );
+    animateMetricChange(
+      el.monitorHappy,
+      el.monitorHappyFill,
+      el.monitorHappyCard,
+      state.happy - previous.happy
+    );
+    animateMetricChange(
+      el.monitorPressure,
+      el.monitorPressureFill,
+      el.monitorPressureCard,
+      pressureValue - previous.pressure,
+      previous.pressure - pressureValue
+    );
+  }
+
+  previousMonitorSnapshot = {
+    money: state.money,
+    happy: state.happy,
+    pressure: pressureValue,
+  };
 }
 
 export function updateStatus(gs) {
   const state = gs.state;
+  const previous = previousStatusSnapshot;
   el.statusJob.textContent = state.job;
   el.statusMoney.textContent = state.money;
   el.statusHappy.textContent = state.happy;
   el.statusDay.textContent = `${dayLabel(state.day)} (${state.day}/5)`;
+  if (previous) {
+    replayDirectionalClass(el.statusMoney, state.money - previous.money);
+    replayDirectionalClass(el.statusHappy, state.happy - previous.happy);
+  }
+  previousStatusSnapshot = {
+    money: state.money,
+    happy: state.happy,
+  };
   updateMonitoring(gs);
 }
 
@@ -289,6 +435,10 @@ export function showPanel(name) {
   el.startPanel.hidden = name !== "start";
   el.gamePanel.hidden = name !== "game";
   el.endPanel.hidden = name !== "end";
+  if (name === "start") {
+    previousStatusSnapshot = null;
+    previousMonitorSnapshot = null;
+  }
 }
 
 export function renderEvent(gs, onChoicePick) {
@@ -301,6 +451,7 @@ export function renderEvent(gs, onChoicePick) {
   moveActor(gs);
   el.eventType.textContent = evt.type;
   el.eventSetup.textContent = evt.setup;
+  el.choices.classList.remove("is-resolving");
   el.choices.innerHTML = "";
   el.hint.textContent = `今日事件 ${gs.eventIndex + 1}/3 · ${gs.roundSourceLabel}${gs.roundSourceDetail ? ` · ${gs.roundSourceDetail}` : ""}`;
 
@@ -309,7 +460,21 @@ export function renderEvent(gs, onChoicePick) {
     button.className = "choice";
     button.type = "button";
     button.innerHTML = `<span>${choice.label}</span><small>${choice.tag}</small>`;
-    button.addEventListener("click", () => onChoicePick(choice, evt.type));
+    button.addEventListener("click", () => {
+      if (el.choices.classList.contains("is-resolving")) {
+        return;
+      }
+      el.choices.classList.add("is-resolving");
+      el.restartBtn.disabled = true;
+      el.choices.querySelectorAll("button").forEach((item) => {
+        item.disabled = true;
+        if (item !== button) {
+          item.classList.add("is-dimmed");
+        }
+      });
+      button.classList.add("is-picked");
+      window.setTimeout(() => onChoicePick(choice, evt.type), CHOICE_PICK_DELAY_MS);
+    });
     el.choices.appendChild(button);
   });
 }
@@ -356,6 +521,15 @@ function endingCopy(ending, s) {
 }
 
 export function showLastDelta(delta) {
+  el.lastDelta.classList.remove("delta-up", "delta-down", "delta-flash");
+  const trend = delta.moneyDelta + delta.happyDelta * 120;
+  if (trend > 0) {
+    el.lastDelta.classList.add("delta-up");
+  } else if (trend < 0) {
+    el.lastDelta.classList.add("delta-down");
+  }
+  void el.lastDelta.offsetWidth;
+  el.lastDelta.classList.add("delta-flash");
   el.lastDelta.textContent = `本次变化: 金钱 ${delta.moneyDelta >= 0 ? "+" : ""}${delta.moneyDelta} / 快乐 ${delta.happyDelta >= 0 ? "+" : ""}${delta.happyDelta}`;
 }
 
@@ -396,6 +570,7 @@ export function updateProviderInputs(aiConfig) {
   el.providerSelect.value = aiConfig.id;
   el.providerEndpoint.value = aiConfig.endpoint || preset.defaultEndpoint;
   el.providerModel.value = aiConfig.model || preset.defaultModel;
+  el.providerModel.placeholder = preset.defaultModel || "例如 x-ai/grok-4.1-fast";
   el.providerApiKey.value = aiConfig.apiKey;
   el.providerEndpoint.disabled = isLocal;
   el.providerModel.disabled = isLocal;
@@ -406,6 +581,38 @@ export function updateProviderInputs(aiConfig) {
 export function showProviderSavedNote(aiConfig) {
   const preset = AI_PROVIDER_PRESETS.find((item) => item.id === aiConfig.id) || AI_PROVIDER_PRESETS[0];
   el.providerNote.textContent = `${preset.note} 设置已保存。`;
+}
+
+export function showProviderNote(message) {
+  el.providerNote.textContent = message;
+}
+
+function exportJsonFile(filenamePrefix, logs) {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    count: Array.isArray(logs) ? logs.length : 0,
+    logs: Array.isArray(logs) ? logs : [],
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${filenamePrefix}-${ts}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export function exportAiSelectionLogs(logs) {
+  exportJsonFile("lifemaker-ai-selection-logs", logs);
+}
+
+export function exportAiHttpErrorLogs(logs) {
+  exportJsonFile("lifemaker-ai-http-error-logs", logs);
 }
 
 function readProviderInputs() {
@@ -435,6 +642,22 @@ export function onRestartClick(callback) {
 
 export function onRestartClick2(callback) {
   el.restartBtn2.addEventListener("click", callback);
+}
+
+export function onExportAiSelectionLogsClick(callback) {
+  el.exportAiSelectionLogBtn.addEventListener("click", callback);
+}
+
+export function onExportAiHttpErrorLogsClick(callback) {
+  el.exportAiHttpErrorLogBtn.addEventListener("click", callback);
+}
+
+export function onClearDebugInfoClick(callback) {
+  el.clearDebugInfoBtn.addEventListener("click", callback);
+}
+
+export function onClearLocalStorageClick(callback) {
+  el.clearLocalStorageBtn.addEventListener("click", callback);
 }
 
 export { DEBUG_MODE };

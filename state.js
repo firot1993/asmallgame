@@ -20,7 +20,50 @@ export const gameState = {
   sceneStep: 0,
 };
 
-export let aiConfig = { id: "local", endpoint: "", model: "", apiKey: "" };
+function normalizeProviderProfile(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    endpoint: typeof source.endpoint === "string" ? source.endpoint : "",
+    model: typeof source.model === "string" ? source.model : "",
+    apiKey: typeof source.apiKey === "string" ? source.apiKey : "",
+  };
+}
+
+function normalizeProfiles(rawProfiles) {
+  const profiles = {};
+  if (!rawProfiles || typeof rawProfiles !== "object") {
+    return profiles;
+  }
+
+  Object.entries(rawProfiles).forEach(([id, value]) => {
+    if (!id) {
+      return;
+    }
+    profiles[id] = normalizeProviderProfile(value);
+  });
+  return profiles;
+}
+
+function buildAiConfig(parsed) {
+  const source = parsed && typeof parsed === "object" ? parsed : {};
+  const id = typeof source.id === "string" && source.id ? source.id : "local";
+  const profiles = normalizeProfiles(source.profiles);
+  const legacyCurrent = normalizeProviderProfile(source);
+  if (!profiles[id]) {
+    profiles[id] = legacyCurrent;
+  }
+
+  const current = profiles[id] || legacyCurrent;
+  return {
+    id,
+    endpoint: current.endpoint,
+    model: current.model,
+    apiKey: current.apiKey,
+    profiles,
+  };
+}
+
+export let aiConfig = buildAiConfig({ id: "local" });
 
 export function resetGameState(job) {
   gameState.state = {
@@ -104,7 +147,17 @@ export function clearSave() {
 }
 
 export function saveAiConfig() {
-  localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(aiConfig));
+  const profiles = aiConfig.profiles && typeof aiConfig.profiles === "object" ? { ...aiConfig.profiles } : {};
+  profiles[aiConfig.id] = normalizeProviderProfile(aiConfig);
+
+  const payload = {
+    id: aiConfig.id,
+    endpoint: aiConfig.endpoint || "",
+    model: aiConfig.model || "",
+    apiKey: aiConfig.apiKey || "",
+    profiles,
+  };
+  localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(payload));
 }
 
 export function loadAiConfig() {
@@ -119,13 +172,8 @@ export function loadAiConfig() {
       return;
     }
 
-    aiConfig = {
-      id: parsed.id || "local",
-      endpoint: parsed.endpoint || "",
-      model: parsed.model || "",
-      apiKey: parsed.apiKey || "",
-    };
+    aiConfig = buildAiConfig(parsed);
   } catch (_err) {
-    aiConfig = { id: "local", endpoint: "", model: "", apiKey: "" };
+    aiConfig = buildAiConfig({ id: "local" });
   }
 }
